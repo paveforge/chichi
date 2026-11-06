@@ -80,8 +80,93 @@ func (u *UpdateUser) Validate() error {
 }
 ```
 
-To use a library such as go-playground/validator, wrap it in a type with a
-`Validate(any) error` method.
+### Using go-playground/validator
+
+chichi doesn't depend on any validation library. To use
+[go-playground/validator v10](https://github.com/go-playground/validator), add a
+small adapter that turns its errors into `chichi.FieldError`s:
+
+```go
+import (
+	"errors"
+	"reflect"
+	"strings"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/paveforge/chichi"
+)
+
+// Playground adapts go-playground/validator to chichi.Validator.
+type Playground struct{ v *validator.Validate }
+
+func NewPlayground() *Playground {
+	v := validator.New(validator.WithRequiredStructEnabled())
+	// Report the json/form/query/path tag name ("email") instead of the Go name ("Email").
+	v.RegisterTagNameFunc(func(f reflect.StructField) string {
+		for _, tag := range []string{"json", "form", "query", "path"} {
+			if name, _, _ := strings.Cut(f.Tag.Get(tag), ","); name != "" && name != "-" {
+				return name
+			}
+		}
+		return f.Name
+	})
+	return &Playground{v: v}
+}
+
+func (p *Playground) Validate(v any) error {
+	err := p.v.Struct(v)
+	var verrs validator.ValidationErrors
+	if !errors.As(err, &verrs) {
+		return err // nil, or *validator.InvalidValidationError
+	}
+	fields := make([]chichi.FieldError, len(verrs))
+	for i, fe := range verrs {
+		reason := fe.Tag() // e.g. "required", "email", "gte"
+		if fe.Param() != "" {
+			reason += "=" + fe.Param() // e.g. "gte=18"
+		}
+		fields[i] = chichi.FieldError{Field: fe.Field(), Reason: reason}
+	}
+	return chichi.ValidationError(fields...)
+}
+```
+
+Register it once and use `validate` tags:
+
+```go
+type CreateUser struct {
+	Email string `json:"email" validate:"required,email"`
+	Age   int    `json:"age"   validate:"gte=18"`
+}
+
+binder := chichi.New(chichi.WithValidator(NewPlayground()))
+
+var req CreateUser
+if err := binder.BindJSON(r, &req); err != nil {
+	chichi.WriteError(w, err)
+	return
+}
+```
+
+An invalid request gets a 422 response:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "validation failed: field 'email': email; field 'age': gte=18",
+  "errors": [
+    {"field": "email", "reason": "email"},
+    {"field": "age", "reason": "gte=18"}
+  ]
+}
+```
+
+Tag rules and a `Validate()` method work together. The validator runs first,
+so use tags for simple rules and `Validate()` for rules that involve several
+fields. For friendlier messages, map `fe.Tag()` to your own text, or use the
+validator's universal-translator support.
 
 ## Errors
 
