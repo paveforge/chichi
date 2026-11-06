@@ -117,3 +117,7 @@ make fuzz
 ```
 
 CI enforces 100% statement coverage, `go vet`, golangci-lint and a short fuzz run.
+
+## License
+
+[MIT](LICENSE)
