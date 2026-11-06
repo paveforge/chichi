@@ -82,64 +82,28 @@ func (u *UpdateUser) Validate() error {
 
 ### Using go-playground/validator
 
-chichi doesn't depend on any validation library. To use
-[go-playground/validator v10](https://github.com/go-playground/validator), add a
-small adapter that turns its errors into `chichi.FieldError`s:
+chichi doesn't depend on any validation library. Support for
+[go-playground/validator v10](https://github.com/go-playground/validator) lives
+in a separate module, so you only download the validator if you use it:
 
-```go
-import (
-	"errors"
-	"reflect"
-	"strings"
-
-	"github.com/go-playground/validator/v10"
-	"github.com/paveforge/chichi"
-)
-
-// Playground adapts go-playground/validator to chichi.Validator.
-type Playground struct{ v *validator.Validate }
-
-func NewPlayground() *Playground {
-	v := validator.New(validator.WithRequiredStructEnabled())
-	// Report the json/form/query/path tag name ("email") instead of the Go name ("Email").
-	v.RegisterTagNameFunc(func(f reflect.StructField) string {
-		for _, tag := range []string{"json", "form", "query", "path"} {
-			if name, _, _ := strings.Cut(f.Tag.Get(tag), ","); name != "" && name != "-" {
-				return name
-			}
-		}
-		return f.Name
-	})
-	return &Playground{v: v}
-}
-
-func (p *Playground) Validate(v any) error {
-	err := p.v.Struct(v)
-	var verrs validator.ValidationErrors
-	if !errors.As(err, &verrs) {
-		return err // nil, or *validator.InvalidValidationError
-	}
-	fields := make([]chichi.FieldError, len(verrs))
-	for i, fe := range verrs {
-		reason := fe.Tag() // e.g. "required", "email", "gte"
-		if fe.Param() != "" {
-			reason += "=" + fe.Param() // e.g. "gte=18"
-		}
-		fields[i] = chichi.FieldError{Field: fe.Field(), Reason: reason}
-	}
-	return chichi.ValidationError(fields...)
-}
+```sh
+go get github.com/paveforge/chichi/playground
 ```
 
 Register it once and use `validate` tags:
 
 ```go
+import (
+	"github.com/paveforge/chichi"
+	"github.com/paveforge/chichi/playground"
+)
+
 type CreateUser struct {
 	Email string `json:"email" validate:"required,email"`
 	Age   int    `json:"age"   validate:"gte=18"`
 }
 
-binder := chichi.New(chichi.WithValidator(NewPlayground()))
+binder := chichi.New(chichi.WithValidator(playground.NewValidator()))
 
 var req CreateUser
 if err := binder.BindJSON(r, &req); err != nil {
@@ -147,6 +111,13 @@ if err := binder.BindJSON(r, &req); err != nil {
 	return
 }
 ```
+
+`NewValidator` turns on `WithRequiredStructEnabled` and reports fields by their
+`json`, `form`, `query` or `path` tag name (`email`, not `Email`; nested fields
+as `address.city`). It accepts `validator.Option`s, and `Engine()` returns the
+underlying `*validator.Validate` for registering custom rules. To use a
+validator you already configured, call `playground.Wrap(v)`, and register
+`playground.TagName` on it to get tag names in errors.
 
 An invalid request gets a 422 response:
 
@@ -165,8 +136,8 @@ An invalid request gets a 422 response:
 
 Tag rules and a `Validate()` method work together. The validator runs first,
 so use tags for simple rules and `Validate()` for rules that involve several
-fields. For friendlier messages, map `fe.Tag()` to your own text, or use the
-validator's universal-translator support.
+fields. Each error's `reason` is the failed tag plus its parameter
+(`gte=18`); map these to friendlier text before showing them to end users if needed.
 
 ## Errors
 

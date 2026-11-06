@@ -30,6 +30,21 @@ jobs:
             go tool cover -func=cover.out | grep -v '100.0%'
             exit 1
           fi
+      # playground is a separate module so chichi doesn't depend on the validator.
+      # GOWORK=off tests it against the chichi version pinned in its go.mod,
+      # as users get it; the default run uses the local chichi via go.work.
+      - name: Test playground module
+        working-directory: playground
+        run: |
+          go vet ./...
+          go test -race -covermode=atomic -coverprofile=cover.out ./...
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $3}')
+          echo "coverage: $total"
+          if [ "$total" != "100.0%" ]; then
+            go tool cover -func=cover.out | grep -v '100.0%'
+            exit 1
+          fi
+          GOWORK=off go test ./...
       - name: Fuzz (short)
         run: |
           go test -run='^$' -fuzz=FuzzBindJSON -fuzztime=20s .
@@ -47,3 +62,4 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5
+          args: ./... ./playground/...
