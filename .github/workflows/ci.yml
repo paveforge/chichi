@@ -41,7 +41,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          # Use the module's Go version, not "stable": golangci-lint panics on
+          # standard-library code newer than the Go it was built with.
+          go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5
