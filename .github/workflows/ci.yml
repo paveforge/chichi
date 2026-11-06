@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.24", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go vet ./...
+      - run: go build ./_examples/...
+      - run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
+      - name: Enforce 100% coverage
+        run: |
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $3}')
+          echo "coverage: $total"
+          if [ "$total" != "100.0%" ]; then
+            go tool cover -func=cover.out | grep -v '100.0%'
+            exit 1
+          fi
+      - name: Fuzz (short)
+        run: |
+          go test -run='^$' -fuzz=FuzzBindJSON -fuzztime=20s .
+          go test -run='^$' -fuzz=FuzzBindQuery -fuzztime=20s .
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Use the module's Go version, not "stable": golangci-lint panics on
+          # standard-library code newer than the Go it was built with.
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5
