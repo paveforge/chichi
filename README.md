@@ -163,6 +163,69 @@ if errors.As(err, &be) { log.Println(be.Status(), be.Fields, be.Err) }
 is never written to the response. `WriteError` writes RFC 9457 problem details,
 and any error that isn't a chichi error becomes an opaque 500.
 
+### Error response contract
+
+`WriteError` responds with `Content-Type: application/problem+json`:
+
+| Member   | Meaning |
+|----------|---------|
+| `type`   | always `about:blank` |
+| `title`  | standard text for the status (`http.StatusText`) |
+| `status` | HTTP status from the table above |
+| `detail` | the client-safe `Error()` message |
+| `errors` | per-field problems; left out when there are none |
+
+Each entry in `errors`:
+
+| Member   | Meaning |
+|----------|---------|
+| `field`  | where the problem is, using tag names (see below) |
+| `source` | `json`, `form`, `query` or `path` for decoding errors; left out for validation errors |
+| `reason` | what went wrong (see below) |
+
+When `errors` is filled in:
+
+| Situation | Status | `field` | `source` | `reason` |
+|-----------|--------|---------|----------|----------|
+| JSON type mismatch | 400 | dotted JSON path, e.g. `address.zip` | `json` | `expected <Go type>`, e.g. `expected int` |
+| Unknown JSON field (`DisallowUnknownFields`) | 400 | the field name | `json` | `unknown field` |
+| Form, query or path value can't be decoded | 400 | the tag name | `form` / `query` / `path` | decoder message, e.g. `invalid integer` |
+| go-playground/validator failure | 422 | namespace without the root struct, e.g. `address.city`, `items[2].name` | — | tag plus parameter, e.g. `required`, `gte=18` |
+| `Validate()` returns `chichi.ValidationError(...)` or `chichi.FieldErr(...)` | 422 | whatever you set | — | whatever you set |
+| `Validate()` returns any other error | 422 | **no `errors` array** | — | — |
+
+Use `ValidationError` or `FieldErr` in your own `Validate()` methods so clients
+get field-level entries. A plain error from `Validate()` returns 422 with no
+`errors`, and **its text is copied into `detail`**, so keep that text safe for
+clients.
+
+```go
+func (o *Order) Validate() error {
+	var fs []chichi.FieldError
+	if o.Qty <= 0 {
+		fs = append(fs, chichi.FieldError{Field: "qty", Reason: "gt=0"})
+	}
+	if o.Coupon != "" && o.Total < 10 {
+		fs = append(fs, chichi.FieldError{Field: "coupon", Reason: "min_total"})
+	}
+	if len(fs) > 0 {
+		return chichi.ValidationError(fs...)
+	}
+	return nil
+}
+```
+
+What clients should do:
+
+- Use `status` to pick the kind of error. A 422 means the body parsed but
+  didn't pass validation, so the user has to change some values. A 400 with
+  `errors` means a value couldn't be decoded, and a 400 without `errors` means
+  the body itself is malformed.
+- Use `field` to attach messages to the matching form inputs.
+- Match `reason` against known values, and fall back to a generic message for
+  anything unknown. Treat `detail` as text for people to read, not something
+  to parse.
+
 ## Development
 
 ```sh
